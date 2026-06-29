@@ -1,0 +1,309 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Product Season Peaks</title>
+<style>
+  :root { color-scheme: light dark; }
+  html,body { margin:0; font:14px/1.4 system-ui,sans-serif; background:#111; color:#eee; }
+  body { padding:16px; }
+  h1 { font-size:18px; margin:0 0 12px; }
+  .toolbar { display:flex; gap:8px; align-items:center; margin-bottom:12px; flex-wrap:wrap; }
+  button { background:#2a2a2a; color:#eee; border:1px solid #444; padding:6px 10px; border-radius:6px; cursor:pointer; font:inherit; }
+  button:hover { background:#333; }
+  select,input[type="text"] { background:#1a1a1a; color:#eee; border:1px solid #444; padding:6px 8px; border-radius:6px; font:inherit; }
+  .hidden { display:none !important; }
+  #sheet-url { width:340px; }
+  .rows { margin-top:12px; display:grid; gap:6px; }
+  .row { display:grid; grid-template-columns: 1.5fr 1fr 1fr 1fr auto; gap:6px; align-items:center; }
+  .row label { font-size:12px; color:#888; grid-column:1/-1; }
+  .row button.del { background:#3a1a1a; border-color:#5a2222; }
+  .row button.del:hover { background:#5a2222; }
+  /* ponytail: SVG fills container width; viewBox keeps aspect; label band right-aligned */
+  .chart-wrap { width:100%; }
+  svg { display:block; background:#0a0a0a; border-radius:8px; width:100%; height:auto; }
+  .axis text { fill:#888; font-size:11px; }
+  .axis line { stroke:#222; }
+  .baseline { stroke:#444; stroke-width:1; stroke-dasharray:3 4; fill:none; }
+  .product-line { stroke-width: 3; fill:none; opacity:.9; stroke-linecap:round; }
+  .dot { fill: currentColor; stroke:#111; stroke-width:2; cursor:grab; }
+  .dot:active { cursor:grabbing; }
+  .dot.peak { fill: currentColor; stroke:#111; stroke-width:2; }
+  .product-label { font-size:13px; font-weight:600; }
+  .view-mode { padding:0 !important; }
+  .view-mode .toolbar-edit { display:none; }
+  .view-mode .row { display:none; }
+  .view-mode h1 { display:none; }
+  .view-mode #view-btn { display:none; }
+  .view-mode .chart-wrap { width:100vw; height:100vh; }
+  .view-mode #chart { width:100%; height:100%; border-radius:0; }
+</style>
+</head>
+<body class="">
+<h1>Product Season Peaks</h1>
+
+<div class="toolbar toolbar-edit">
+  <input id="sheet-url" placeholder="Google Sheet published CSV URL (optional)">
+  <button id="load-btn">Load sheet</button>
+  <button id="sample-btn">Sample data</button>
+  <span style="opacity:.6;font-size:12px;margin-left:auto">edit mode · <code>?view=1</code> hides controls</span>
+</div>
+
+<div class="toolbar">
+  <button id="view-btn">Open view URL</button>
+  <button id="add-btn" class="toolbar-edit">+ Product</button>
+</div>
+
+<div class="chart-wrap">
+<svg id="chart" viewBox="0 0 900 380" preserveAspectRatio="xMidYMid meet"></svg>
+</div>
+
+<div class="rows toolbar-edit" id="rows"></div>
+
+<script>
+// ponytail: single-file, no deps, vanilla JS, SVG. Skipped: build step, framework, URL persistence, touch drag.
+const MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+const COLORS = ['#ff6b6b','#4ecdc4','#ffe66d','#a78bfa','#fb923c','#34d399','#f472b6','#60a5fa'];
+
+let products = [];
+
+const $ = (s, r=document) => r.querySelector(s);
+const $$ = (s, r=document) => Array.from(r.querySelectorAll(s));
+
+const W = 900, H = 380, PAD_L = 40, PAD_R = 150, PAD_T = 30, PAD_B = 40;
+const plotW = W - PAD_L - PAD_R, plotH = H - PAD_T - PAD_B;
+const ROW_H = 56;                                        // ponytail: each product own lane (was shared baseline — labels collided)
+const ROWS_N = Math.max(3, 12);                          // viewport slots; resizable below
+const ROW_TOP = PAD_T + 14;
+// ponytail: peak 55% of a single row's height (= ROW_H*0.55) — proportional, not whole plot
+const PEAK_LIFT = ROW_H * 0.55;
+const xFor = m => PAD_L + ((m - 0.5) / 12) * plotW;
+const rowBaselineFor = i => ROW_TOP + i * ROW_H + ROW_H * 0.78;
+const rowPeakFor     = i => ROW_TOP + i * ROW_H + ROW_H * 0.78 - PEAK_LIFT;
+
+const monthIdx = s => { if (typeof s === 'number') return s; const i = MONTHS.indexOf((s||'').slice(0,3)); return i<0?0:i; };
+
+const DEFAULT = [
+  { name:'Strawberries', start:'Apr', mid:'Jun', end:'Aug' },
+  { name:'Watermelon',   start:'Jun', mid:'Aug', end:'Oct' },
+  { name:'Pumpkin',      start:'Sep', mid:'Oct', end:'Dec' },
+];
+
+// ponytail: invariant start ≤ mid ≤ end; load normalizes even if sheet is sloppy
+function normalize(p) {
+  const s = monthIdx(p.start), m = monthIdx(p.mid), e = monthIdx(p.end);
+  let ss=s, mm=m, ee=e;
+  if (mm < ss) mm = ss;
+  if (mm > ee) mm = ee;
+  return { name:p.name, start:MONTHS[ss], mid:MONTHS[mm], end:MONTHS[ee] };
+}
+
+function renderRows() {
+  const r = $('#rows');
+  r.innerHTML = '';
+  products.forEach((p, i) => {
+    const row = document.createElement('div');
+    row.className = 'row';
+    row.innerHTML = `
+      <label>Product ${i+1}</label>
+      <input type="text" value="${p.name||''}" data-k="name">
+      <select data-k="start">${MONTH_OPTS(p.start)}</select>
+      <select data-k="mid">${MONTH_OPTS(p.mid)}</select>
+      <select data-k="end">${MONTH_OPTS(p.end)}</select>
+      <button class="del toolbar-edit" data-i="${i}">×</button>`;
+    $$('input,select', row).forEach(el => {
+      el.addEventListener('input', e => {
+        p[e.target.dataset.k] = e.target.value;
+        p = normalize(p); products[i] = p;             // ponytail: clamp on edit so drag can't overlap
+        draw();
+      });
+    });
+    const del = $('button.del', row);
+    if (del) del.addEventListener('click', () => { products.splice(i,1); renderRows(); draw(); });
+    r.appendChild(row);
+  });
+}
+
+function MONTH_OPTS(cur='') {
+  return `<option value="">…</option>` + MONTHS.map(m => `<option ${m===cur?'selected':''}>${m}</option>`).join('');
+}
+
+function draw() {
+  const svg = $('#chart');
+  // ponytail: in view mode, viewBox scales to real viewport so chart fills w/h 100%
+  // in edit mode, fixed logical coords (W x dynamic H) so authors work in pixels
+  const isView = document.body.classList.contains('view-mode');
+  const vw = isView ? window.innerWidth : W;
+  const vh = isView ? Math.max(window.innerHeight, ROW_TOP + products.length * ROW_H + PAD_B) : Math.max(H, ROW_TOP + products.length * ROW_H + PAD_B);
+  const padL = isView ? Math.max(40, vw * 0.04) : PAD_L;
+  const padR = isView ? Math.max(150, vw * 0.18) : PAD_R;
+  const padB = isView ? Math.max(40, vh * 0.06) : PAD_B;
+  const plotW = vw - padL - padR;
+  svg.setAttribute('viewBox', `0 0 ${vw} ${vh}`);
+  svg.innerHTML = '';
+  const vbH = vh;
+  // axes (x = month grid + labels at very bottom of chart, y = baseline markers)
+  const axis = document.createElementNS('http://www.w3.org/2000/svg','g');
+  axis.setAttribute('class','axis');
+  MONTHS.forEach((m,i) => {
+    const x = padL + ((i + 0.5) / 12) * plotW;
+    const t = document.createElementNS('http://www.w3.org/2000/svg','text');
+    t.setAttribute('x', x); t.setAttribute('y', vbH - padB + 18);
+    t.setAttribute('text-anchor','middle'); t.textContent = m;
+    axis.appendChild(t);
+    const l = document.createElementNS('http://www.w3.org/2000/svg','line');
+    l.setAttribute('x1',x); l.setAttribute('x2',x); l.setAttribute('y1',PAD_T); l.setAttribute('y2',vbH-padB);
+    l.setAttribute('stroke','#1f1f1f');
+    axis.appendChild(l);
+  });
+  svg.appendChild(axis);
+
+  products.forEach((p,i) => {
+    const c = COLORS[i % COLORS.length];
+    const baseY = rowBaselineFor(i);
+    const peakY = rowPeakFor(i);
+    const g = document.createElementNS('http://www.w3.org/2000/svg','g');
+    g.setAttribute('data-i', i);
+    g.style.color = c;
+
+    // per-row baseline + label background strip so labels can't visually touch each other
+    const strip = document.createElementNS('http://www.w3.org/2000/svg','line');
+    strip.setAttribute('class','baseline');
+    strip.setAttribute('x1', padL); strip.setAttribute('x2', vw - padR);
+    strip.setAttribute('y1', baseY); strip.setAttribute('y2', baseY);
+    svg.appendChild(strip);
+
+    const lbl = document.createElementNS('http://www.w3.org/2000/svg','text');
+    lbl.setAttribute('class','product-label');
+    lbl.setAttribute('x', vw - padR + 10); lbl.setAttribute('y', baseY + 4);
+    lbl.setAttribute('fill', c); lbl.textContent = p.name || `Product ${i+1}`;
+    lbl.setAttribute('clip-path', 'inset(0 0 0 0)'); // ponytail: keep inside label gutter
+    svg.appendChild(lbl);
+
+    const si = monthIdx(p.start), mi = monthIdx(p.mid), ei = monthIdx(p.end);
+    const start = { x:padL + ((si + 0.5) / 12) * plotW, y:baseY };
+    const peak  = { x:padL + ((mi + 0.5) / 12) * plotW, y:peakY };
+    const end   = { x:padL + ((ei + 0.5) / 12) * plotW, y:baseY };
+
+    // ponytail: 2 quadratic Bezier humps (start->peak, peak->end) — smooth, 1 control point each
+    const humpDx = (peak.x - start.x) * 0.55;
+    const d = `M ${start.x},${start.y}
+               Q ${start.x + humpDx},${peak.y} ${peak.x},${peak.y}
+               Q ${peak.x + humpDx},${peak.y} ${end.x},${end.y}`;
+    const line = document.createElementNS('http://www.w3.org/2000/svg','path');
+    line.setAttribute('class','product-line');
+    line.setAttribute('stroke', c);
+    line.setAttribute('d', d);
+    g.appendChild(line);
+
+    // dots — peak bigger + ring
+    [start, peak, end].forEach((pt, idx) => {
+      const dot = document.createElementNS('http://www.w3.org/2000/svg','circle');
+      const isPeak = idx === 1;
+      dot.setAttribute('class', 'dot' + (isPeak ? ' peak' : ''));
+      dot.setAttribute('cx', pt.x); dot.setAttribute('cy', pt.y);
+      dot.setAttribute('r', isPeak ? 9 : 7);
+      dot.dataset.prod = i; dot.dataset.dot = isPeak ? 'mid' : (idx === 0 ? 'start' : 'end');
+      if (!document.body.classList.contains('view-mode')) enableDrag(dot);
+      g.appendChild(dot);
+    });
+    svg.appendChild(g);
+  });
+}
+
+function enableDrag(dot) {
+  const svg = $('#chart');
+  const onMove = e => {
+    const rect = svg.getBoundingClientRect();
+    // ponytail: derive padL/plotW from current viewBox so drag works in both modes
+    const vb = svg.getAttribute('viewBox').split(' ').map(Number);
+    const vbW = vb[2];
+    const isView = document.body.classList.contains('view-mode');
+    const padL = isView ? Math.max(40, vbW * 0.04) : PAD_L;
+    const padR = isView ? Math.max(150, vbW * 0.18) : PAD_R;
+    const plotW = vbW - padL - padR;
+    const px = (e.clientX - rect.left) / rect.width * vbW;
+    let mx = (px - padL) / plotW * 12 - 0.5;
+    mx = Math.max(0, Math.min(11.99, mx));
+    const mIdx = Math.round(mx);
+    const k = dot.dataset.dot;
+    const prod = products[+dot.dataset.prod];
+    if (k === 'start') {
+      const cm = monthIdx(prod.mid);
+      prod.start = MONTHS[Math.min(mIdx, cm - 0 < 1 ? 0 : Math.max(0, Math.min(mIdx, cm-1)))]; // peak must stay strictly between
+      // recompute directly: clamp mIdx < midIdx
+      const midIdx = monthIdx(prod.mid);
+      prod.start = MONTHS[Math.max(0, Math.min(mIdx, midIdx - 1))];
+    } else if (k === 'end') {
+      const midIdx = monthIdx(prod.mid);
+      prod.end = MONTHS[Math.min(11, Math.max(mIdx, midIdx + 1))];
+    } else { // peak
+      const sIdx = monthIdx(prod.start), eIdx = monthIdx(prod.end);
+      const clamped = Math.max(sIdx + 1, Math.min(eIdx - 1, mIdx));
+      prod.mid = MONTHS[clamped];
+    }
+    products[+dot.dataset.prod] = normalize(prod);
+    draw();
+  };
+  const onUp = () => { window.removeEventListener('mousemove', onMove); window.removeEventListener('mouseup', onUp); };
+  dot.addEventListener('mousedown', e => { e.preventDefault(); window.addEventListener('mousemove', onMove); window.addEventListener('mouseup', onUp); });
+}
+
+// ponytail: 5-line CSV parser, handles quoted fields. Skipped Papa Parse (CDN dep).
+function parseCSV(text) {
+  const out = []; let row = [], cur = '', inQ = false;
+  for (let i=0;i<text.length;i++) {
+    const ch = text[i];
+    if (inQ) { if (ch==='"') { if (text[i+1]==='"') { cur+='"'; i++; } else inQ=false; } else cur+=ch; }
+    else if (ch==='"') inQ=true;
+    else if (ch===',') { row.push(cur); cur=''; }
+    else if (ch==='\n') { row.push(cur); out.push(row); row=[]; cur=''; }
+    else if (ch!=='\r') cur+=ch;
+  }
+  if (cur||row.length) { row.push(cur); out.push(row); }
+  return out;
+}
+
+function loadCSV(text) {
+  const rows = parseCSV(text.trim()).filter(r => r.length>1 && r.some(c=>c));
+  const header = rows.shift().map(s=>s.trim().toLowerCase());
+  const need = ['product','start','mid','end'];
+  if (!need.every(n => header.includes(n))) throw new Error('Header must include: Product,Start,Mid,End');
+  const ix = need.map(n => header.indexOf(n));
+  products = rows.map(r => normalize({ name:r[ix[0]], start:r[ix[1]], mid:r[ix[2]], end:r[ix[3]] }));
+  renderRows(); draw();
+}
+
+async function loadSheet(url) {
+  const csvUrl = url.includes('/edit') ? url.split('/edit')[0] + '/pub?output=csv' : url;
+  const r = await fetch(csvUrl);
+  if (!r.ok) throw new Error('fetch '+r.status);
+  loadCSV(await r.text());
+}
+
+// wire
+$('#sample-btn').addEventListener('click', () => { products = JSON.parse(JSON.stringify(DEFAULT)); renderRows(); draw(); });
+$('#add-btn').addEventListener('click', () => { products.push({ name:'New product', start:'Jan', mid:'Apr', end:'Jul' }); renderRows(); draw(); });
+$('#load-btn').addEventListener('click', () => { const u = $('#sheet-url').value.trim(); if(!u) return; loadSheet(u).catch(e=>alert(e.message)); });
+$('#view-btn').addEventListener('click', () => {
+  const url = new URL(location.href); url.searchParams.set('view','1');
+  navigator.clipboard?.writeText(url.toString());
+  open(url.toString(), '_blank');
+});
+
+if (new URL(location.href).searchParams.get('view')==='1') document.body.classList.add('view-mode');
+
+// ponytail: in view mode, recompute on resize so chart fills viewport not just first frame
+let _resizeT;
+window.addEventListener('resize', () => {
+  if (!document.body.classList.contains('view-mode')) return;
+  clearTimeout(_resizeT);
+  _resizeT = setTimeout(() => draw(), 50);
+});
+
+products = JSON.parse(JSON.stringify(DEFAULT));
+renderRows(); draw();
+</script>
+</body>
+</html>
