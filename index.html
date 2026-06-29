@@ -31,7 +31,8 @@
   .dot:active { cursor:grabbing; }
   .dot.peak { fill: currentColor; stroke:#111; stroke-width:2; }
   .product-label { font-size:13px; font-weight:600; }
-  .view-mode { padding:0 !important; }
+  .view-mode { padding:0 !important; user-select:none; -webkit-user-select:none; }
+  .view-mode * { user-select:none; -webkit-user-select:none; }
   .view-mode .toolbar-edit { display:none; }
   .view-mode .row { display:none; }
   .view-mode h1 { display:none; }
@@ -76,11 +77,11 @@ const plotW = W - PAD_L - PAD_R, plotH = H - PAD_T - PAD_B;
 const ROW_H = 56;                                        // ponytail: each product own lane (was shared baseline — labels collided)
 const ROWS_N = Math.max(3, 12);                          // viewport slots; resizable below
 const ROW_TOP = PAD_T + 14;
-// ponytail: peak 55% of a single row's height (= ROW_H*0.55) — proportional, not whole plot
-const PEAK_LIFT = ROW_H * 0.55;
+// ponytail: peak heights vary per product (30%-70% of plot height), all >25%
+// deterministic via hash of index so same product always same height
+const PEAK_HEIGHTS = [0.55, 0.42, 0.68, 0.35, 0.60, 0.48, 0.72, 0.38, 0.52, 0.45, 0.63, 0.30];
+const peakHeightFor = i => PEAK_HEIGHTS[i % PEAK_HEIGHTS.length];
 const xFor = m => PAD_L + ((m - 0.5) / 12) * plotW;
-const rowBaselineFor = i => ROW_TOP + i * ROW_H + ROW_H * 0.78;
-const rowPeakFor     = i => ROW_TOP + i * ROW_H + ROW_H * 0.78 - PEAK_LIFT;
 
 const monthIdx = s => { if (typeof s === 'number') return s; const i = MONTHS.indexOf((s||'').slice(0,3)); return i<0?0:i; };
 
@@ -159,52 +160,77 @@ function draw() {
   });
   svg.appendChild(axis);
 
+  // ponytail: single shared X-axis baseline at bottom — all products start/end here, peaks rise up
+  const baseY = vbH - padB;  // bottom of plot area = X-axis
+  const topY = PAD_T;       // top of plot area
+  const plotH = baseY - topY;
+
+  // solid baseline at X-axis
+  const baseLine = document.createElementNS('http://www.w3.org/2000/svg','line');
+  baseLine.setAttribute('class','baseline');
+  baseLine.setAttribute('x1', padL); baseLine.setAttribute('x2', vw - padR);
+  baseLine.setAttribute('y1', baseY); baseLine.setAttribute('y2', baseY);
+  svg.appendChild(baseLine);
+
+  // ponytail: compute label Y positions — spread vertically in label gutter to avoid overlap
+  const labelCount = products.length;
+  const labelAreaTop = topY + 10;
+  const labelAreaH = plotH - 20;
+  const labelYFor = i => labelAreaTop + (labelCount > 1 ? (i / (labelCount - 1)) * labelAreaH : labelAreaH / 2);
+
   products.forEach((p,i) => {
     const c = COLORS[i % COLORS.length];
-    const baseY = rowBaselineFor(i);
-    const peakY = rowPeakFor(i);
     const g = document.createElementNS('http://www.w3.org/2000/svg','g');
     g.setAttribute('data-i', i);
     g.style.color = c;
 
-    // per-row baseline + label background strip so labels can't visually touch each other
-    const strip = document.createElementNS('http://www.w3.org/2000/svg','line');
-    strip.setAttribute('class','baseline');
-    strip.setAttribute('x1', padL); strip.setAttribute('x2', vw - padR);
-    strip.setAttribute('y1', baseY); strip.setAttribute('y2', baseY);
-    svg.appendChild(strip);
+    // label near the peak, offset to the right of peak dot
+    const si = monthIdx(p.start), mi = monthIdx(p.mid), ei = monthIdx(p.end);
+    const startX = padL + ((si + 0.5) / 12) * plotW;
+    const peakX  = padL + ((mi + 0.5) / 12) * plotW;
+    const endX   = padL + ((ei + 0.5) / 12) * plotW;
+    const peakH = peakHeightFor(i);                          // 0.30..0.72 of plot height
+    const peakY = topY + plotH * (1 - peakH);                // higher peakH = higher Y from bottom
 
+    // product label — placed at peak height, to the right of the chart
     const lbl = document.createElementNS('http://www.w3.org/2000/svg','text');
     lbl.setAttribute('class','product-label');
-    lbl.setAttribute('x', vw - padR + 10); lbl.setAttribute('y', baseY + 4);
+    lbl.setAttribute('x', vw - padR + 10); lbl.setAttribute('y', labelYFor(i) + 4);
     lbl.setAttribute('fill', c); lbl.textContent = p.name || `Product ${i+1}`;
-    lbl.setAttribute('clip-path', 'inset(0 0 0 0)'); // ponytail: keep inside label gutter
     svg.appendChild(lbl);
 
-    const si = monthIdx(p.start), mi = monthIdx(p.mid), ei = monthIdx(p.end);
-    const start = { x:padL + ((si + 0.5) / 12) * plotW, y:baseY };
-    const peak  = { x:padL + ((mi + 0.5) / 12) * plotW, y:peakY };
-    const end   = { x:padL + ((ei + 0.5) / 12) * plotW, y:baseY };
+    // ponytail: thin connector from peak to label so user knows which line = which product
+    const conn = document.createElementNS('http://www.w3.org/2000/svg','line');
+    conn.setAttribute('stroke', c); conn.setAttribute('stroke-width', 1); conn.setAttribute('opacity', 0.3);
+    conn.setAttribute('stroke-dasharray', '2 3');
+    conn.setAttribute('x1', peakX); conn.setAttribute('y1', peakY);
+    conn.setAttribute('x2', vw - padR + 6); conn.setAttribute('y2', labelYFor(i) + 4);
+    svg.appendChild(conn);
 
-    // ponytail: 2 quadratic Bezier humps (start->peak, peak->end) — smooth, 1 control point each
-    const humpDx = (peak.x - start.x) * 0.55;
-    const d = `M ${start.x},${start.y}
-               Q ${start.x + humpDx},${peak.y} ${peak.x},${peak.y}
-               Q ${peak.x + humpDx},${peak.y} ${end.x},${end.y}`;
+    // ponytail: smooth hump from baseline up to peak then back to baseline
+    const humpDx1 = (peakX - startX) * 0.55;
+    const humpDx2 = (endX - peakX) * 0.55;
+    const d = `M ${startX},${baseY}
+               Q ${startX + humpDx1},${peakY} ${peakX},${peakY}
+               Q ${peakX + humpDx2},${peakY} ${endX},${baseY}`;
     const line = document.createElementNS('http://www.w3.org/2000/svg','path');
     line.setAttribute('class','product-line');
     line.setAttribute('stroke', c);
     line.setAttribute('d', d);
     g.appendChild(line);
 
-    // dots — peak bigger + ring
-    [start, peak, end].forEach((pt, idx) => {
+    // dots — start/peak/end
+    const pts = [
+      { x:startX, y:baseY, k:'start' },
+      { x:peakX,  y:peakY, k:'mid', isPeak:true },
+      { x:endX,   y:baseY, k:'end' },
+    ];
+    pts.forEach(pt => {
       const dot = document.createElementNS('http://www.w3.org/2000/svg','circle');
-      const isPeak = idx === 1;
-      dot.setAttribute('class', 'dot' + (isPeak ? ' peak' : ''));
+      dot.setAttribute('class', 'dot' + (pt.isPeak ? ' peak' : ''));
       dot.setAttribute('cx', pt.x); dot.setAttribute('cy', pt.y);
-      dot.setAttribute('r', isPeak ? 9 : 7);
-      dot.dataset.prod = i; dot.dataset.dot = isPeak ? 'mid' : (idx === 0 ? 'start' : 'end');
+      dot.setAttribute('r', pt.isPeak ? 9 : 7);
+      dot.dataset.prod = i; dot.dataset.dot = pt.k;
       if (!document.body.classList.contains('view-mode')) enableDrag(dot);
       g.appendChild(dot);
     });
