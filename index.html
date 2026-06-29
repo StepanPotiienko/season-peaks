@@ -31,7 +31,8 @@
   .dot:active { cursor:grabbing; }
   .dot.peak { fill: currentColor; stroke:#111; stroke-width:2; }
   .product-label { font-size:13px; font-weight:600; }
-  .view-mode { padding:0 !important; user-select:none; -webkit-user-select:none; }
+  .view-mode { padding:0 !important; user-select:none; -webkit-user-select:none; overflow:hidden; }
+  html.view-mode, body.view-mode { overflow:hidden; margin:0; padding:0; }
   .view-mode * { user-select:none; -webkit-user-select:none; }
   .view-mode .toolbar-edit { display:none; }
   .view-mode .row { display:none; }
