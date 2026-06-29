@@ -26,11 +26,16 @@
   .axis text { fill:#888; font-size:11px; }
   .axis line { stroke:#222; }
   .baseline { stroke:#444; stroke-width:1; stroke-dasharray:3 4; fill:none; }
-  .product-line { stroke-width: 3; fill:none; opacity:.9; stroke-linecap:round; }
-  .dot { fill: currentColor; stroke:#111; stroke-width:2; cursor:grab; }
+  .product-line { stroke-width: 3; fill:none; opacity:.9; stroke-linecap:round; transition: opacity .2s ease; }
+  .dot { fill: currentColor; stroke:#111; stroke-width:2; cursor:grab; transition: opacity .2s ease; }
   .dot:active { cursor:grabbing; }
   .dot.peak { fill: currentColor; stroke:#111; stroke-width:2; }
-  .product-label { font-size:13px; font-weight:600; }
+  .product-label { font-size:13px; font-weight:600; transition: opacity .2s ease; }
+  .product-connector { transition: opacity .2s ease; }
+  /* ponytail: hover focus — dim everything except hovered product */
+  #chart.hover-active .product-group { opacity: 0.15; }
+  #chart.hover-active .product-group:hover,
+  #chart.hover-active .product-group.hovered { opacity: 1; }
   .view-mode { padding:0 !important; user-select:none; -webkit-user-select:none; overflow:hidden; }
   html.view-mode, body.view-mode { overflow:hidden; margin:0; padding:0; }
   .view-mode * { user-select:none; -webkit-user-select:none; }
@@ -182,6 +187,7 @@ function draw() {
   products.forEach((p,i) => {
     const c = COLORS[i % COLORS.length];
     const g = document.createElementNS('http://www.w3.org/2000/svg','g');
+    g.setAttribute('class', 'product-group');
     g.setAttribute('data-i', i);
     g.style.color = c;
 
@@ -198,15 +204,16 @@ function draw() {
     lbl.setAttribute('class','product-label');
     lbl.setAttribute('x', vw - padR + 10); lbl.setAttribute('y', labelYFor(i) + 4);
     lbl.setAttribute('fill', c); lbl.textContent = p.name || `Product ${i+1}`;
-    svg.appendChild(lbl);
+    g.appendChild(lbl);
 
     // ponytail: thin connector from peak to label so user knows which line = which product
     const conn = document.createElementNS('http://www.w3.org/2000/svg','line');
+    conn.setAttribute('class','product-connector');
     conn.setAttribute('stroke', c); conn.setAttribute('stroke-width', 1); conn.setAttribute('opacity', 0.3);
     conn.setAttribute('stroke-dasharray', '2 3');
     conn.setAttribute('x1', peakX); conn.setAttribute('y1', peakY);
     conn.setAttribute('x2', vw - padR + 6); conn.setAttribute('y2', labelYFor(i) + 4);
-    svg.appendChild(conn);
+    g.appendChild(conn);
 
     // ponytail: smooth hump from baseline up to peak then back to baseline
     const humpDx1 = (peakX - startX) * 0.55;
@@ -235,6 +242,11 @@ function draw() {
       if (!document.body.classList.contains('view-mode')) enableDrag(dot);
       g.appendChild(dot);
     });
+
+    // ponytail: hover focus — dim all other products, brighten this one
+    g.addEventListener('mouseenter', () => { svg.classList.add('hover-active'); });
+    g.addEventListener('mouseleave', () => { svg.classList.remove('hover-active'); });
+
     svg.appendChild(g);
   });
 }
