@@ -116,11 +116,11 @@ function renderRows() {
       el.addEventListener('input', e => {
         p[e.target.dataset.k] = e.target.value;
         p = normalize(p); products[i] = p;             // ponytail: clamp on edit so drag can't overlap
-        draw();
+        draw(); saveToHash();
       });
     });
     const del = $('button.del', row);
-    if (del) del.addEventListener('click', () => { products.splice(i,1); renderRows(); draw(); });
+    if (del) del.addEventListener('click', () => { products.splice(i,1); renderRows(); draw(); saveToHash(); });
     r.appendChild(row);
   });
 }
@@ -244,7 +244,7 @@ function enableDrag(dot) {
       prod.mid = MONTHS[clamped];
     }
     products[+dot.dataset.prod] = normalize(prod);
-    draw();
+    draw(); saveToHash();
   };
   const onUp = () => { window.removeEventListener('mousemove', onMove); window.removeEventListener('mouseup', onUp); };
   dot.addEventListener('mousedown', e => { e.preventDefault(); window.addEventListener('mousemove', onMove); window.addEventListener('mouseup', onUp); });
@@ -276,17 +276,52 @@ function loadCSV(text) {
 }
 
 async function loadSheet(url) {
-  const csvUrl = url.includes('/edit') ? url.split('/edit')[0] + '/pub?output=csv' : url;
-  const r = await fetch(csvUrl);
-  if (!r.ok) throw new Error('fetch '+r.status);
-  loadCSV(await r.text());
+  // ponytail: try 3 export endpoints — pub (published), export (shared), gviz (shared, most permissive)
+  const id = (url.match(/\/d\/([a-zA-Z0-9_-]+)/) || [])[1];
+  const urls = id ? [
+    `https://docs.google.com/spreadsheets/d/${id}/gviz/tq?tqx=out:csv`,
+    `https://docs.google.com/spreadsheets/d/${id}/export?format=csv`,
+    `https://docs.google.com/spreadsheets/d/${id}/pub?output=csv`,
+  ] : [url];
+  let lastErr;
+  for (const u of urls) {
+    try {
+      const r = await fetch(u);
+      if (!r.ok) { lastErr = new Error('fetch '+r.status); continue; }
+      const text = await r.text();
+      if (text.startsWith('<!') || text.length < 10) { lastErr = new Error('empty response'); continue; }
+      loadCSV(text); return;
+    } catch (e) { lastErr = e; }
+  }
+  throw lastErr || new Error('Could not load sheet. Make sure it is shared "Anyone with link" or published to web.');
+}
+
+// ponytail: persist products in URL hash so edit→view carries data
+function saveToHash() {
+  const compact = products.map(p => {
+    const s = monthIdx(p.start), m = monthIdx(p.mid), e = monthIdx(p.end);
+    return `${p.name||''}:${s}:${m}:${e}`;
+  }).join(';');
+  history.replaceState(null, '', '#' + encodeURIComponent(compact));
+}
+function loadFromHash() {
+  const h = decodeURIComponent(location.hash.slice(1));
+  if (!h) return false;
+  try {
+    products = h.split(';').filter(x=>x).map(x => {
+      const [name, s, m, e] = x.split(':');
+      return { name: name||'Product', start: MONTHS[+s]||'Jan', mid: MONTHS[+m]||'Apr', end: MONTHS[+e]||'Jul' };
+    });
+    return products.length > 0;
+  } catch { return false; }
 }
 
 // wire
-$('#sample-btn').addEventListener('click', () => { products = JSON.parse(JSON.stringify(DEFAULT)); renderRows(); draw(); });
-$('#add-btn').addEventListener('click', () => { products.push({ name:'New product', start:'Jan', mid:'Apr', end:'Jul' }); renderRows(); draw(); });
-$('#load-btn').addEventListener('click', () => { const u = $('#sheet-url').value.trim(); if(!u) return; loadSheet(u).catch(e=>alert(e.message)); });
+$('#sample-btn').addEventListener('click', () => { products = JSON.parse(JSON.stringify(DEFAULT)); renderRows(); draw(); saveToHash(); });
+$('#add-btn').addEventListener('click', () => { products.push({ name:'New product', start:'Jan', mid:'Apr', end:'Jul' }); renderRows(); draw(); saveToHash(); });
+$('#load-btn').addEventListener('click', () => { const u = $('#sheet-url').value.trim(); if(!u) return; loadSheet(u).then(()=>saveToHash()).catch(e=>alert(e.message)); });
 $('#view-btn').addEventListener('click', () => {
+  saveToHash();
   const url = new URL(location.href); url.searchParams.set('view','1');
   navigator.clipboard?.writeText(url.toString());
   open(url.toString(), '_blank');
@@ -302,7 +337,8 @@ window.addEventListener('resize', () => {
   _resizeT = setTimeout(() => draw(), 50);
 });
 
-products = JSON.parse(JSON.stringify(DEFAULT));
+// init: load from URL hash if present, else sample data
+if (!loadFromHash()) { products = JSON.parse(JSON.stringify(DEFAULT)); }
 renderRows(); draw();
 </script>
 </body>
