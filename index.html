@@ -227,6 +227,16 @@ function draw() {
     line.setAttribute('d', d);
     g.appendChild(line);
 
+    // ponytail: invisible fat stroke = easier hover target, pointer-events only
+    const hitArea = document.createElementNS('http://www.w3.org/2000/svg','path');
+    hitArea.setAttribute('d', d);
+    hitArea.setAttribute('fill','none');
+    hitArea.setAttribute('stroke','transparent');
+    hitArea.setAttribute('stroke-width','20');
+    hitArea.setAttribute('stroke-linecap','round');
+    hitArea.style.pointerEvents = 'stroke';
+    g.appendChild(hitArea);
+
     // dots — start/peak/end
     const pts = [
       { x:startX, y:baseY, k:'start' },
