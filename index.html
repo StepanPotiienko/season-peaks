@@ -20,6 +20,10 @@
   .row label { font-size:12px; color:#888; grid-column:1/-1; }
   .row button.del { background:#3a1a1a; border-color:#5a2222; }
   .row button.del:hover { background:#5a2222; }
+  .color-palette { display:flex; gap:4px; flex-wrap:wrap; grid-column:1/-1; }
+  .color-swatch { width:22px; height:22px; border-radius:4px; cursor:pointer; border:2px solid transparent; transition: transform .1s; }
+  .color-swatch:hover { transform: scale(1.15); }
+  .color-swatch.active { border-color:#fff; box-shadow:0 0 0 1px #000; }
   /* ponytail: SVG fills container width; viewBox keeps aspect; label band right-aligned */
   .chart-wrap { width:100%; }
   svg { display:block; background:#0a0a0a; border-radius:8px; width:100%; height:auto; }
@@ -71,7 +75,7 @@
 <script>
 // ponytail: single-file, no deps, vanilla JS, SVG. Skipped: build step, framework, URL persistence, touch drag.
 const MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
-const COLORS = ['#ff6b6b','#4ecdc4','#ffe66d','#a78bfa','#fb923c','#34d399','#f472b6','#60a5fa'];
+const COLORS = ['#ff6b6b','#4ecdc4','#ffe66d','#a78bfa','#fb923c','#34d399','#f472b6','#60a5fa','#f59e0b','#8b5cf6'];
 
 let products = [];
 
@@ -103,13 +107,14 @@ function normalize(p) {
   let ss=s, mm=m, ee=e;
   if (mm < ss) mm = ss;
   if (mm > ee) mm = ee;
-  return { name:p.name, start:MONTHS[ss], mid:MONTHS[mm], end:MONTHS[ee] };
+  return { name:p.name, start:MONTHS[ss], mid:MONTHS[mm], end:MONTHS[ee], color:p.color };
 }
 
 function renderRows() {
   const r = $('#rows');
   r.innerHTML = '';
   products.forEach((p, i) => {
+    const color = p.color || COLORS[i % COLORS.length];
     const row = document.createElement('div');
     row.className = 'row';
     row.innerHTML = `
@@ -118,7 +123,8 @@ function renderRows() {
       <select data-k="start">${MONTH_OPTS(p.start)}</select>
       <select data-k="mid">${MONTH_OPTS(p.mid)}</select>
       <select data-k="end">${MONTH_OPTS(p.end)}</select>
-      <button class="del toolbar-edit" data-i="${i}">×</button>`;
+      <button class="del toolbar-edit" data-i="${i}">×</button>
+      <div class="color-palette">${COLORS.map(c => `<div class="color-swatch${c===color?' active':''}" style="background:${c}" data-color="${c}"></div>`).join('')}</div>`;
     $$('input,select', row).forEach(el => {
       el.addEventListener('input', e => {
         p[e.target.dataset.k] = e.target.value;
@@ -128,6 +134,12 @@ function renderRows() {
     });
     const del = $('button.del', row);
     if (del) del.addEventListener('click', () => { products.splice(i,1); renderRows(); draw(); saveToHash(); });
+    $$('.color-swatch', row).forEach(sw => {
+      sw.addEventListener('click', () => {
+        products[i].color = sw.dataset.color;
+        renderRows(); draw(); saveToHash();
+      });
+    });
     r.appendChild(row);
   });
 }
@@ -185,7 +197,7 @@ function draw() {
   const labelYFor = i => labelAreaTop + (labelCount > 1 ? (i / (labelCount - 1)) * labelAreaH : labelAreaH / 2);
 
   products.forEach((p,i) => {
-    const c = COLORS[i % COLORS.length];
+    const c = p.color || COLORS[i % COLORS.length];
     const g = document.createElementNS('http://www.w3.org/2000/svg','g');
     g.setAttribute('class', 'product-group');
     g.setAttribute('data-i', i);
@@ -349,7 +361,8 @@ async function loadSheet(url) {
 function saveToHash() {
   const compact = products.map(p => {
     const s = monthIdx(p.start), m = monthIdx(p.mid), e = monthIdx(p.end);
-    return `${p.name||''}:${s}:${m}:${e}`;
+    const ci = p.color ? COLORS.indexOf(p.color) : -1;
+    return `${p.name||''}:${s}:${m}:${e}:${ci>=0?ci:''}`;
   }).join(';');
   history.replaceState(null, '', '#' + encodeURIComponent(compact));
 }
@@ -358,8 +371,10 @@ function loadFromHash() {
   if (!h) return false;
   try {
     products = h.split(';').filter(x=>x).map(x => {
-      const [name, s, m, e] = x.split(':');
-      return { name: name||'Product', start: MONTHS[+s]||'Jan', mid: MONTHS[+m]||'Apr', end: MONTHS[+e]||'Jul' };
+      const parts = x.split(':');
+      const [name, s, m, e, ci] = parts;
+      const color = ci !== undefined && ci !== '' && COLORS[+ci] ? COLORS[+ci] : undefined;
+      return { name: name||'Product', start: MONTHS[+s]||'Jan', mid: MONTHS[+m]||'Apr', end: MONTHS[+e]||'Jul', color };
     });
     return products.length > 0;
   } catch { return false; }
